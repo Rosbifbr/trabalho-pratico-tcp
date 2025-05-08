@@ -1,3 +1,5 @@
+import * as Tone from 'https://cdn.jsdelivr.net/npm/tone@15.1.22/+esm';
+
 export default class Frontend {
   constructor() {
     this.screenStart = document.getElementById("screen_start");
@@ -16,8 +18,10 @@ export default class Frontend {
   }
 
   initUI() {
-    this.form.addEventListener("submit", (e) => {
+    this.form.addEventListener("submit", async (e) => {
       e.preventDefault();
+      // Unlock AudioContext while still inside the user-gesture event stack
+      await Tone.start();
       this.cbStart?.(this.#collectConfig());
     });
     this.btnStop.addEventListener("click", () => this.cbStop?.());

@@ -1,48 +1,53 @@
+import * as Tone from 'https://cdn.jsdelivr.net/npm/tone@15.1.22/+esm';
+
 export default class MidiPlayer {
   constructor() {
-    this.ctx = null;
-    this.master = null;
+    this.synth = null;
     this.bpm = 120;
-    this.instrument = 0;
     this.octave = 4;
+    this.instrumentNumber = 0;
+    // Oscillator approximations for selected GM programs
+    this.instrumentMap = {
+      0: 'sine',
+      1: 'square',
+      2: 'triangle',
+      3: 'sawtooth',
+      15: 'triangle',  // Tubular Bells
+      24: 'square',    // Bandoneon
+      110: 'sawtooth', // Bagpipe
+      114: 'sine',     // Agogô
+      123: 'square'    // Sea Waves
+    };
+    this.volumeDb = 0;
   }
 
-  init() {
-    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-    this.master = this.ctx.createGain();
-    this.master.gain.value = 0.8;
-    this.master.connect(this.ctx.destination);
+  async init() {
+    await Tone.start();
+    this.#createSynth('sine');
   }
 
-  deinit() {
-    this.ctx?.close();
-    this.ctx = null;
+  #createSynth(type) {
+    if (this.synth) this.synth.dispose();
+    this.synth = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type }
+    }).toDestination();
+    this.synth.volume.value = this.volumeDb;
   }
 
-  playNote(note, duration) {
-    if (!this.ctx) return;
-    const osc = this.ctx.createOscillator();
-    const g = this.ctx.createGain();
-
-    osc.type = "sine"; // placeholder timbre
-    osc.frequency.value = 440 * Math.pow(2, (note - 69) / 12);
-
-    g.gain.setValueAtTime(this.master.gain.value, this.ctx.currentTime);
-    g.gain.linearRampToValueAtTime(0, this.ctx.currentTime + duration);
-
-    osc.connect(g);
-    g.connect(this.master);
-
-    osc.start();
-    osc.stop(this.ctx.currentTime + duration + 0.05);
+  playNote(midiNote, durationSec) {
+    if (midiNote === null) return;
+    this.synth.triggerAttackRelease(Tone.Frequency(midiNote, 'midi'), durationSec);
   }
 
-  changeInstrument(n) {
-    this.instrument = n; // stub
+  changeInstrument(program) {
+    this.instrumentNumber = program;
+    const type = this.instrumentMap[program] || 'sine';
+    this.#createSynth(type);
   }
 
   setVolume(lvl) {
-    if (this.master) this.master.gain.value = lvl / 100;
+    this.volumeDb = Tone.gainToDb(lvl / 100);
+    if (this.synth) this.synth.volume.value = this.volumeDb;
   }
 
   setBPM(b) {
@@ -54,7 +59,10 @@ export default class MidiPlayer {
   }
 
   stopAll() {
-    this.deinit();
-    this.init();
+    if (this.synth) {
+      this.synth.releaseAll();
+      this.synth.dispose();
+      this.synth = null;
+    }
   }
 }
