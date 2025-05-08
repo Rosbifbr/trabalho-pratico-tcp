@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Text-to-Music Generator</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main id="app">
+    <!-- Start screen -->
+    <section id="screen_start" class="screen visible">
+      <h1>Text-to-Music Generator</h1>
+
+      <form id="configForm">
+        <label>Texto
+          <input type="file" id="textFile" accept=".txt" />
+        </label>
+
+        <label>Instrumento (GM#)
+          <input type="number" id="instrument" min="0" max="127" value="0" />
+        </label>
+
+        <label>Volume
+          <input type="range" id="volume" min="0" max="100" value="80" />
+        </label>
+
+        <label>BPM
+          <input type="number" id="bpm" min="30" max="240" value="120" />
+        </label>
+
+        <label>Oitava
+          <input type="number" id="octave" min="1" max="8" value="4" />
+        </label>
+
+        <button type="submit" id="btnStart">Iniciar</button>
+      </form>
+    </section>
+
+    <!-- Running screen -->
+    <section id="screen_running" class="screen">
+      <h1>Executando…</h1>
+      <div id="status">
+        <p>Instrumento: <span id="statusInstrument">-</span></p>
+        <p>Volume: <span id="statusVolume">-</span></p>
+        <p>Nota: <span id="statusNote">-</span></p>
+        <p>Oitava: <span id="statusOctave">-</span></p>
+        <p>Progresso: <span id="statusProgress">0/0</span></p>
+      </div>
+      <button id="btnStop">Parar</button>
+    </section>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
