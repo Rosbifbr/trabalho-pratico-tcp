@@ -86,29 +86,61 @@ export default class MainPlayer {
       // This is acceptable as per the subtask description.
     }
 
-    const ch = this.parser.readNextChar();
-    this.processedChars++;
-    const note = this.#processChar(ch); // This might set mainLoopNeedsBPMUpdate to true
-
-    console.log({
-      idx: this.processedChars,
-      char: ch,
-      note,
-      instrument: this.currentInstrument,
-      volume: this.currentVolume,
-      octave: this.currentOctave,
-      bpm: this.bpm
-    });
-
-    // Use current BPM for note duration, even if a change is pending for the next interval
-    const currentBeatMs = 60000 / this.bpm;
-    if (note !== null) {
-      this.midi.playNote(note, currentBeatMs / 1000);
+    let ch = this.parser.readNextChar();
+    if (ch === null) { // Should only happen if parser was EOF from the start or became EOF
+      this.stop();
+      return;
     }
+    // Initial increment for the first character read in this beat processing cycle.
+    // This accounts for the character 'ch' that was just read from the parser.
+    this.processedChars++;
 
-    this.frontend.updateNoteDisplay(ch, note ?? "-", this.processedChars, this.totalChars);
+    let result;
+    // This loop processes an initial character and then, if indicated by
+    // result.needsImmediateReprocess, fetches and processes subsequent characters immediately.
+    // This is crucial for handling multi-character control sequences (e.g., "BPM+", "R+", "R-")
+    // and ensuring that any character immediately following such a sequence is processed
+    // without waiting for the next beat interval, making the sequence and its
+    // subsequent character appear as part of a single continuous operation.
+    do {
+      result = this.#processChar(ch);
 
-    // Regular state update, including BPM and instrument name
+      console.log({
+        idx: this.processedChars, // Log current total processed
+        char: ch, // The character just processed
+        pitch: result.pitch,
+        needsReprocess: result.needsImmediateReprocess,
+        instrument: this.currentInstrument,
+        volume: this.currentVolume,
+        octave: this.currentOctave,
+        bpm: this.bpm
+      });
+
+      const currentBeatMs = 60000 / this.bpm;
+      if (result.pitch !== null) {
+        this.midi.playNote(result.pitch, currentBeatMs / 1000);
+      }
+
+      // Update note display for the character that was just processed
+      this.frontend.updateNoteDisplay(ch, result.pitch ?? "-", this.processedChars, this.totalChars);
+
+      if (result.needsImmediateReprocess && !this.parser.isEOF()) {
+        ch = this.parser.readNextChar();
+        if (ch === null) { // EOF reached during immediate reprocessing
+          result.needsImmediateReprocess = false; // Ensure loop termination
+        } else {
+          // Increment for the new character that was just consumed from the parser
+          // for immediate reprocessing within the same beat cycle.
+          this.processedChars++;
+        }
+      } else {
+        result.needsImmediateReprocess = false; // Ensure loop termination if EOF or no reprocessing needed
+      }
+
+    } while (result.needsImmediateReprocess);
+
+    // Regular state update, including BPM and instrument name.
+    // This happens once per beat, after all immediate characters for this beat are processed.
     const currentInstrumentName = this.midi.getInstrumentName(this.currentInstrument);
     this.frontend.updateState({
       instrument: currentInstrumentName,
@@ -132,8 +164,20 @@ export default class MainPlayer {
     this.totalChars = 0;
   }
 
+  /**
+   * Processes a single character from the input stream and determines its musical effect.
+   * @param {string} ch The character to process.
+   * @returns {{pitch: number|null, needsImmediateReprocess: boolean}}
+   *          An object containing:
+   *          - `pitch`: The MIDI pitch value if the character represents a note, otherwise null.
+   *          - `needsImmediateReprocess`: A boolean indicating whether `processNextCharacter`
+   *            should immediately fetch and process the next character from the stream. This
+   *            is true for completed multi-character control sequences like "BPM+", "R+", "R-",
+   *            allowing the character immediately following them to be processed in the same beat.
+   */
   #processChar(ch) {
     let pitch = null;
+    let needsImmediateReprocess = false;
     const charUpper = ch.toUpperCase();
     const storedLastCharWasNoteGrapheme = this.lastCharWasNoteGrapheme;
     this.lastCharWasNoteGrapheme = false;
@@ -151,55 +195,60 @@ export default class MainPlayer {
             plus_char_peek === '+') {
 
           // Full "BPM+" sequence detected. Consume ch ('B'), P, M, +
-          // 'ch' (which is 'B') is already consumed by the main readNextChar() call.
-          // Now consume P, M, + from the parser stream.
+          // 'ch' (which is 'B') was already consumed by processNextCharacter.
+          // Here, we consume the 'P', 'M', and '+' characters from the parser stream.
           this.parser.readNextChar(); // Consume P
           this.parser.readNextChar(); // Consume M
           this.parser.readNextChar(); // Consume +
+
+          // Account for the 3 characters (P, M, +) just consumed from the parser.
+          this.processedChars += 3;
 
           // Perform BPM change action
           this.bpm += 80;
           this.bpm = Math.max(30, this.bpm);
           this.mainLoopNeedsBPMUpdate = true;
 
-          // Ensure activeSequence is clear in case it was set by something else (though unlikely here)
           this.activeSequence = "";
-          return null; // BPM change processed, no note to play from this sequence
+          // Signal to immediately process the character following "BPM+".
+          return { pitch: null, needsImmediateReprocess: true };
         }
       }
-      // If not a full "BPM+" sequence (either due to null peeks or content mismatch),
-      // 'B' will fall through to normal note processing.
+      // If not a full "BPM+" sequence, 'B' will fall through to normal note processing.
     }
 
-    // Existing R sequence logic (can remain as is, since 'R' is not a note)
+    // Handling 'R' for octave changes (R+ or R-).
     if (this.activeSequence === "" && charUpper === 'R') {
       this.activeSequence = "R";
-      return null;
+      // 'R' is encountered. We set activeSequence to "R" and wait for the next character.
+      // No note is played for 'R' itself, and we don't reprocess immediately,
+      // as we need the *next* character to determine if it's "R+" or "R-".
+      return { pitch: null, needsImmediateReprocess: false };
     }
+
     if (this.activeSequence === "R") {
-      this.activeSequence = "";
+      this.activeSequence = ""; // Reset sequence state regardless of what ch is.
       if (ch === '+') {
-        console.log(`Octave change: R+ detected. Octave before: ${this.currentOctave}`);
         this.currentOctave = Math.min(8, this.currentOctave + 1);
-        console.log(`Octave after: ${this.currentOctave}`);
+        // "R+" processed. Octave changed. Signal to immediately process the next character.
+        return { pitch: null, needsImmediateReprocess: true };
       } else if (ch === '-') {
-        console.log(`Octave change: R- detected. Octave before: ${this.currentOctave}`);
         this.currentOctave = Math.max(1, this.currentOctave - 1);
-        console.log(`Octave after: ${this.currentOctave}`);
+        // "R-" processed. Octave changed. Signal to immediately process the next character.
+        return { pitch: null, needsImmediateReprocess: true };
       } else {
-        // If sequence is broken, re-process the current char 'ch'
-        // Make sure activeSequence is clear before reprocessing.
-        this.activeSequence = ""; // Clear sequence before reprocessing
-        return this.#processChar(ch);
+        // Active sequence was "R", but current char 'ch' is not '+' or '-'.
+        // The sequence is broken. We need to re-process the current character 'ch'
+        // as if 'R' was never encountered before it.
+        // The 'ch' was already consumed by processNextCharacter and accounted for in processedChars.
+        // The recursive call to #processChar will determine its actual effect.
+        return this.#processChar(ch); // Return the result of reprocessing 'ch'.
       }
-      return null;
     }
-    // This line ensures that if a sequence (like R) was initiated but not completed
-    // by a subsequent character, the activeSequence state is reset.
-    // For 'R', it's reset within its block if '+' or '-' isn't found.
-    // If 'R' was the *ch* and no R+, R- followed, it would be reset here too.
-    // This is a general catch-all. If all sequences manage their state perfectly,
-    // this specific line might become redundant, but it's safer for now.
+
+    // General reset for any other potential sequences if they weren't completed.
+    // This might be redundant if all sequences manage their state perfectly,
+    // but it's a safeguard.
     this.activeSequence = "";
 
     if (charUpper in this.noteValues) {
@@ -219,16 +268,18 @@ export default class MainPlayer {
         pitch = this.lastPitch;
         this.lastCharWasNoteGrapheme = true;
       } else {
-        this.currentInstrument = 125;
+        // This case should ideally not happen with proper OIU handling
+        // but as a fallback, change instrument and play a default note.
+        this.currentInstrument = 125; // Placeholder for 'unknown' or 'default'
         this.midi.changeInstrument(this.currentInstrument);
-        pitch = 72; // C5
+        pitch = 72; // C5, as a fallback
       }
     } else if (ch === '?') {
       const noteKeys = Object.keys(this.noteValues);
       const randomNoteKey = noteKeys[Math.floor(Math.random() * noteKeys.length)];
       pitch = 12 * this.currentOctave + this.noteValues[randomNoteKey];
       this.lastPitch = pitch;
-      this.lastCharWasNoteGrapheme = true; // Added line
+      this.lastCharWasNoteGrapheme = true;
     } else if (ch === '\n' || ch === '\r') {
       let currentDefaultListIndex = this.instrumentList.indexOf(this.currentInstrument);
       if (this.instrumentCycleIndex === -1 && currentDefaultListIndex !== -1) {
@@ -240,9 +291,11 @@ export default class MainPlayer {
     } else if (ch === ';') {
       this.bpm = Math.floor(Math.random() * (180 - 60 + 1)) + 60;
       this.mainLoopNeedsBPMUpdate = true;
+      // ";" itself doesn't produce a note or need immediate reprocessing of the *next* char.
+      // The BPM update is handled by the main loop schedulling.
     } else {
-      // NOP
+      // NOP for unrecognized characters
     }
-    return pitch;
+    return { pitch: pitch, needsImmediateReprocess: needsImmediateReprocess };
   }
 }
