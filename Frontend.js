@@ -1,5 +1,3 @@
-import * as Tone from 'https://cdn.jsdelivr.net/npm/tone@15.1.22/+esm';
-
 export default class Frontend {
   constructor() {
     this.screenStart = document.getElementById("screen_start");
@@ -9,6 +7,7 @@ export default class Frontend {
 
     this.sInstrument = document.getElementById("statusInstrument");
     this.sVolume = document.getElementById("statusVolume");
+    this.sBpm = document.getElementById("statusBpm"); // Added BPM status element
     this.sNote = document.getElementById("statusNote");
     this.sOctave = document.getElementById("statusOctave");
     this.sProgress = document.getElementById("statusProgress");
@@ -21,7 +20,7 @@ export default class Frontend {
     this.form.addEventListener("submit", async (e) => {
       e.preventDefault();
       // Unlock AudioContext while still inside the user-gesture event stack
-      await Tone.start();
+      // await Tone.start(); // Removed as soundfont-player uses standard AudioContext
       this.cbStart?.(this.#collectConfig());
     });
     this.btnStop.addEventListener("click", () => this.cbStop?.());
@@ -55,9 +54,10 @@ export default class Frontend {
   }
 
   updateState(st) {
-    this.sInstrument.textContent = st.instrument;
-    this.sVolume.textContent = st.volume;
-    this.sOctave.textContent = st.octave;
+    if (st.instrument !== undefined) this.sInstrument.textContent = st.instrument;
+    if (st.volume !== undefined) this.sVolume.textContent = st.volume;
+    if (st.octave !== undefined) this.sOctave.textContent = st.octave;
+    if (st.bpm !== undefined) this.sBpm.textContent = st.bpm; // Update BPM display
   }
 
   updateNoteDisplay(ch, note, idx, total) {

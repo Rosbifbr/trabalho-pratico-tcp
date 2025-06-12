@@ -9,12 +9,24 @@ export default class MainPlayer {
     this.intervalId = null;
 
     // runtime state
+    this.bpm = 120;
     this.defaultOctave = 4;
     this.currentOctave = 4;
+    this.defaultVolume = 80;
+    this.currentVolume = 80;
     this.currentInstrument = 0;
-    this.currentVolume = 100;
-    this.lastPitch = null;      // absolute MIDI value of last played note
-    this.prevWasNote = false;
+    this.instrumentList = [0, 40, 73, 25, 56]; // GM: Piano, Violin, Flute, Steel Guitar, Trumpet
+    this.instrumentCycleIndex = -1;
+
+    this.activeSequence = "";
+    this.mainLoopNeedsBPMUpdate = false;
+
+    this.noteValues = { 'A': 9, 'B': 11, 'C': 0, 'D': 2, 'E': 4, 'F': 5, 'G': 7 };
+    this.lastCharWasNoteGrapheme = false;
+    this.lastPitch = null;
+
+    this.processedChars = 0;
+    this.totalChars = 0;
   }
 
   async start(cfg) {
@@ -22,37 +34,88 @@ export default class MainPlayer {
 
     this.parser = new TextParser(cfg.file);
     await this.parser.open();
-    const total = this.parser.text.length;
-    let processed = 0;
+    this.totalChars = this.parser.text.length;
+    this.processedChars = 0;
 
     await this.midi.init();
 
+    this.bpm = cfg.bpm;
     this.defaultOctave = cfg.octave;
     this.currentOctave = cfg.octave;
-    this.currentInstrument = cfg.instrument;
+    this.defaultVolume = cfg.volume;
     this.currentVolume = cfg.volume;
+    this.currentInstrument = cfg.instrument;
+
+    this.instrumentCycleIndex = -1;
+    this.activeSequence = "";
+    this.mainLoopNeedsBPMUpdate = false;
+    this.lastCharWasNoteGrapheme = false;
+    this.lastPitch = null;
 
     this.midi.changeInstrument(this.currentInstrument);
     this.midi.setVolume(this.currentVolume);
-    this.midi.setBPM(cfg.bpm);
 
-    this.frontend.updateState({ instrument: this.currentInstrument, volume: this.currentVolume, octave: this.currentOctave });
+    const initialInstrumentName = this.midi.getInstrumentName(this.currentInstrument);
+    this.frontend.updateState({
+      instrument: initialInstrumentName,
+      volume: this.currentVolume,
+      octave: this.currentOctave,
+      bpm: this.bpm  // Initial BPM display
+    });
     this.frontend.showRunning();
 
-    const beatMs = 60000 / cfg.bpm;
+    const initialBeatMs = 60000 / this.bpm;
+    this.intervalId = setInterval(() => this.processNextCharacter(), initialBeatMs);
+  }
 
-    this.intervalId = setInterval(() => {
-      if (this.parser.isEOF()) return this.stop();
+  processNextCharacter() {
+    if (this.parser.isEOF()) {
+      this.stop();
+      return;
+    }
 
-      const ch = this.parser.readNextChar();
-      const note = this.#processChar(ch);
+    // Handle BPM changes before processing the next character
+    if (this.mainLoopNeedsBPMUpdate) {
+      clearInterval(this.intervalId);
+      const newBeatMs = 60000 / this.bpm;
+      this.intervalId = setInterval(() => this.processNextCharacter(), newBeatMs);
+      this.mainLoopNeedsBPMUpdate = false;
+      // Update BPM in UI immediately when it's processed
+      this.frontend.updateState({ bpm: this.bpm });
+      // The current character that might have triggered this will be processed in the *next* interval tick.
+      // This is acceptable as per the subtask description.
+    }
 
-      console.log({ idx: ++processed, char: ch, note, instrument: this.currentInstrument, volume: this.currentVolume, octave: this.currentOctave });
+    const ch = this.parser.readNextChar();
+    this.processedChars++;
+    const note = this.#processChar(ch); // This might set mainLoopNeedsBPMUpdate to true
 
-      this.midi.playNote(note, beatMs / 1000);
-      this.frontend.updateNoteDisplay(ch, note ?? "-", processed, total);
-      this.frontend.updateState({ instrument: this.currentInstrument, volume: this.currentVolume, octave: this.currentOctave });
-    }, beatMs);
+    // console.log({
+    //   idx: this.processedChars,
+    //   char: ch,
+    //   note,
+    //   instrument: this.currentInstrument,
+    //   volume: this.currentVolume,
+    //   octave: this.currentOctave,
+    //   bpm: this.bpm
+    // });
+
+    // Use current BPM for note duration, even if a change is pending for the next interval
+    const currentBeatMs = 60000 / this.bpm;
+    if (note !== null) {
+      this.midi.playNote(note, currentBeatMs / 1000);
+    }
+
+    this.frontend.updateNoteDisplay(ch, note ?? "-", this.processedChars, this.totalChars);
+
+    // Regular state update, including BPM and instrument name
+    const currentInstrumentName = this.midi.getInstrumentName(this.currentInstrument);
+    this.frontend.updateState({
+      instrument: currentInstrumentName,
+      volume: this.currentVolume,
+      octave: this.currentOctave,
+      bpm: this.bpm
+    });
   }
 
   stop() {
@@ -62,82 +125,110 @@ export default class MainPlayer {
     this.midi.stopAll();
     this.lastPitch = null;
     this.frontend.showStart();
+    this.activeSequence = "";
+    this.mainLoopNeedsBPMUpdate = false;
+    this.lastCharWasNoteGrapheme = false;
+    this.processedChars = 0; // Reset for next run
+    this.totalChars = 0;
   }
 
-  /* ---------- mapping logic ---------- */
   #processChar(ch) {
     let pitch = null;
-    const isDigit = (c) => c >= "0" && c <= "9";
+    const charUpper = ch.toUpperCase();
+    const storedLastCharWasNoteGrapheme = this.lastCharWasNoteGrapheme;
+    this.lastCharWasNoteGrapheme = false;
 
-    const noteMap = { A: 9, B: 11, C: 0, D: 2, E: 4, F: 5, G: 7, H: 10 }; // semitones from C - Major + Minor 7th
-    const upper = ch.toUpperCase();
-
-    // Upper-case letters A-H → notes
-    if ("ABCDEFGH".includes(upper) && ch === upper) {
-      pitch = 12 * this.currentOctave + noteMap[upper];
-
-      // keep strictly ascending ─ raise an octave when needed
-      if (this.lastPitch !== null && pitch <= this.lastPitch) {
-        pitch += 12;
-        this.currentOctave = Math.floor(pitch / 12);
+    if (this.activeSequence === "" && charUpper === 'R') {
+      this.activeSequence = "R";
+      return null;
+    }
+    if (this.activeSequence === "R") {
+      this.activeSequence = "";
+      if (ch === '+') {
+        this.currentOctave = Math.min(8, this.currentOctave + 1);
+      } else if (ch === '-') {
+        this.currentOctave = Math.max(1, this.currentOctave - 1);
+      } else {
+        return this.#processChar(ch);
       }
+      return null;
+    }
 
+    if (this.activeSequence === "" && charUpper === 'B') {
+      this.activeSequence = "B";
+      return null;
+    }
+    if (this.activeSequence === "B") {
+      if (charUpper === 'P') {
+        this.activeSequence = "BP";
+      } else {
+        this.activeSequence = "";
+        return this.#processChar(ch);
+      }
+      return null;
+    }
+    if (this.activeSequence === "BP") {
+      if (charUpper === 'M') {
+        this.activeSequence = "BPM";
+      } else {
+        this.activeSequence = "";
+        return this.#processChar(ch);
+      }
+      return null;
+    }
+    if (this.activeSequence === "BPM") {
+      this.activeSequence = "";
+      if (ch === '+') {
+        this.bpm += 80;
+        this.bpm = Math.max(30, this.bpm);
+        this.mainLoopNeedsBPMUpdate = true;
+      } else {
+        return this.#processChar(ch);
+      }
+      return null;
+    }
+    this.activeSequence = "";
+
+    if (charUpper in this.noteValues) {
+      pitch = 12 * this.currentOctave + this.noteValues[charUpper];
       this.lastPitch = pitch;
-      this.prevWasNote = true;
-      return pitch;
-    }
-
-    // lower-case a-h → silence
-    if ("abcdefgh".includes(ch)) { this.prevWasNote = false; return null; }
-
-    // space → double volume (cap at 100)
-    if (ch === " ") {
-      this.currentVolume = Math.min(this.currentVolume * 2, 100);
+      this.lastCharWasNoteGrapheme = true;
+    } else if (ch === ' ') {
+      // Silence
+    } else if (ch === '+') {
+      this.currentVolume = Math.min(100, this.currentVolume * 2);
       this.midi.setVolume(this.currentVolume);
-      this.prevWasNote = false;
-      return null;
-    }
-
-    // ! → Bandoneon #24
-    if (ch === "!") return this.#setInstrument(24);
-
-    // vowels O/o I/i U/u → Bagpipe #110
-    if ("OIUoiu".includes(ch)) return this.#setInstrument(110);
-
-    // even digit → add digit to current GM program
-    if (isDigit(ch) && Number(ch) % 2 === 0) return this.#setInstrument((this.currentInstrument + Number(ch)) % 128);
-
-    // ? or . → raise one octave (wrap to default)
-    if (ch === "?" || ch === ".") {
-      this.currentOctave = this.currentOctave < 8 ? this.currentOctave + 1 : this.defaultOctave;
-      this.prevWasNote = false;
-      return null;
-    }
-
-    // newline → Sea Waves #123
-    if (ch === "\n" || ch === "\r") return this.#setInstrument(123);
-
-    // ; or odd digit → Tubular Bells #15
-    if (ch === ";" || (isDigit(ch) && Number(ch) % 2 === 1)) return this.#setInstrument(15);
-
-    // , → Agogô #114
-    if (ch === ",") return this.#setInstrument(114);
-
-    // other consonants
-    if (this.prevWasNote && this.lastPitch !== null) {
-      pitch = this.lastPitch;
+    } else if (ch === '-') {
+      this.currentVolume = this.defaultVolume;
+      this.midi.setVolume(this.currentVolume);
+    } else if (['O', 'I', 'U'].includes(charUpper)) {
+      if (storedLastCharWasNoteGrapheme && this.lastPitch !== null) {
+        pitch = this.lastPitch;
+        this.lastCharWasNoteGrapheme = true;
+      } else {
+        this.currentInstrument = 125;
+        this.midi.changeInstrument(this.currentInstrument);
+        pitch = 72; // C5
+      }
+    } else if (ch === '?') {
+      const noteKeys = Object.keys(this.noteValues);
+      const randomNoteKey = noteKeys[Math.floor(Math.random() * noteKeys.length)];
+      pitch = 12 * this.currentOctave + this.noteValues[randomNoteKey];
+      this.lastPitch = pitch;
+    } else if (ch === '\n' || ch === '\r') {
+      let currentDefaultListIndex = this.instrumentList.indexOf(this.currentInstrument);
+      if (this.instrumentCycleIndex === -1 && currentDefaultListIndex !== -1) {
+         this.instrumentCycleIndex = currentDefaultListIndex;
+      }
+      this.instrumentCycleIndex = (this.instrumentCycleIndex + 1) % this.instrumentList.length;
+      this.currentInstrument = this.instrumentList[this.instrumentCycleIndex];
+      this.midi.changeInstrument(this.currentInstrument);
+    } else if (ch === ';') {
+      this.bpm = Math.floor(Math.random() * (180 - 60 + 1)) + 60;
+      this.mainLoopNeedsBPMUpdate = true;
     } else {
-      this.prevWasNote = false;
+      // NOP
     }
     return pitch;
-  }
-
-  #setInstrument(program) {
-    if (program !== this.currentInstrument) {
-      this.currentInstrument = program;
-      this.midi.changeInstrument(program);
-    }
-    this.prevWasNote = false;
-    return null;
   }
 }
