@@ -1,5 +1,3 @@
-// MainPlayer.js
-// Ascending-pitch fix: guarantees A-H always rise or stay above the previous note
 import TextParser from "./TextParser.js";
 import MidiPlayer from "./MidiPlayer.js";
 
@@ -71,7 +69,7 @@ export default class MainPlayer {
     let pitch = null;
     const isDigit = (c) => c >= "0" && c <= "9";
 
-    const noteMap = { A: 9, B: 11, C: 0, D: 2, E: 4, F: 5, G: 7, H: 10 }; // semitones from C
+    const noteMap = { A: 9, B: 11, C: 0, D: 2, E: 4, F: 5, G: 7, H: 10 }; // semitones from C - Major + Minor 7th
     const upper = ch.toUpperCase();
 
     // Upper-case letters A-H → notes
