@@ -218,38 +218,52 @@ export default class MainPlayer {
     }
 
     // Handling 'R' for octave changes (R+ or R-).
+    // Rule 1: When 'R' is encountered (and no other sequence is active).
     if (this.activeSequence === "" && charUpper === 'R') {
       this.activeSequence = "R";
-      // 'R' is encountered. We set activeSequence to "R" and wait for the next character.
-      // No note is played for 'R' itself, and we don't reprocess immediately,
-      // as we need the *next* character to determine if it's "R+" or "R-".
-      return { pitch: null, needsImmediateReprocess: false };
+      // No note is played for 'R' itself.
+      // Return needsImmediateReprocess: true to make processNextCharacter immediately
+      // fetch the next character from the stream. This next character is expected
+      // to be '+', '-', or another character that would break the R-sequence.
+      // This allows for rapid processing of "R+", "R-", or "RX" (where X breaks sequence).
+      return { pitch: null, needsImmediateReprocess: true };
     }
 
+    // Rule 2: Processing the character *after* 'R' was just processed.
     if (this.activeSequence === "R") {
-      this.activeSequence = ""; // Reset sequence state regardless of what ch is.
-      if (ch === '+') {
+      // The current 'ch' is the character immediately following 'R'.
+      const charAfterR = ch;
+      // Reset activeSequence immediately, as 'R' has now been "consumed" conceptually
+      // by leading to this point, regardless of whether ch forms R+ or R-.
+      this.activeSequence = "";
+
+      if (charAfterR === '+') {
         this.currentOctave = Math.min(8, this.currentOctave + 1);
-        // "R+" processed. Octave changed. Signal to immediately process the next character.
+        // "R+" sequence completed. Octave changed.
+        // Return needsImmediateReprocess: true to immediately process the character
+        // *following* the '+', e.g., a note in "R+C" or another command.
         return { pitch: null, needsImmediateReprocess: true };
-      } else if (ch === '-') {
+      } else if (charAfterR === '-') {
         this.currentOctave = Math.max(1, this.currentOctave - 1);
-        // "R-" processed. Octave changed. Signal to immediately process the next character.
+        // "R-" sequence completed. Octave changed.
+        // Return needsImmediateReprocess: true to immediately process the character
+        // *following* the '-', e.g., a note in "R-C" or another command.
         return { pitch: null, needsImmediateReprocess: true };
       } else {
-        // Active sequence was "R", but current char 'ch' is not '+' or '-'.
-        // The sequence is broken. We need to re-process the current character 'ch'
-        // as if 'R' was never encountered before it.
-        // The 'ch' was already consumed by processNextCharacter and accounted for in processedChars.
-        // The recursive call to #processChar will determine its actual effect.
-        return this.#processChar(ch); // Return the result of reprocessing 'ch'.
+        // Active sequence was "R", but charAfterR is neither '+' nor '-'.
+        // The R-sequence is broken.
+        // `activeSequence` has already been reset to "".
+        // We now re-process charAfterR as if 'R' was never there.
+        // The charAfterR was already consumed by processNextCharacter in the loop.
+        // The result of this reprocessing (which is an object {pitch, needsImmediateReprocess})
+        // will be returned directly.
+        return this.#processChar(charAfterR);
       }
     }
 
-    // General reset for any other potential sequences if they weren't completed.
-    // This might be redundant if all sequences manage their state perfectly,
-    // but it's a safeguard.
-    this.activeSequence = "";
+    // Note: The general `this.activeSequence = "";` line that was here previously
+    // has been removed because the 'R' sequence logic now fully manages its state,
+    // and other sequences (like "BPM+") also manage their own state or don't use activeSequence.
 
     if (charUpper in this.noteValues) {
       pitch = 12 * this.currentOctave + this.noteValues[charUpper];
