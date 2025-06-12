@@ -90,15 +90,15 @@ export default class MainPlayer {
     this.processedChars++;
     const note = this.#processChar(ch); // This might set mainLoopNeedsBPMUpdate to true
 
-    // console.log({
-    //   idx: this.processedChars,
-    //   char: ch,
-    //   note,
-    //   instrument: this.currentInstrument,
-    //   volume: this.currentVolume,
-    //   octave: this.currentOctave,
-    //   bpm: this.bpm
-    // });
+    console.log({
+      idx: this.processedChars,
+      char: ch,
+      note,
+      instrument: this.currentInstrument,
+      volume: this.currentVolume,
+      octave: this.currentOctave,
+      bpm: this.bpm
+    });
 
     // Use current BPM for note duration, even if a change is pending for the next interval
     const currentBeatMs = 60000 / this.bpm;
@@ -138,6 +138,34 @@ export default class MainPlayer {
     const storedLastCharWasNoteGrapheme = this.lastCharWasNoteGrapheme;
     this.lastCharWasNoteGrapheme = false;
 
+    // Refactored BPM+ sequence detection using peeking
+    if (charUpper === 'B') {
+      const p_peek = this.parser.peekCharAt(0)?.toUpperCase(); // char for parser.index (next char)
+      const m_peek = this.parser.peekCharAt(1)?.toUpperCase(); // char for parser.index + 1
+      const plus_peek = this.parser.peekCharAt(2);           // char for parser.index + 2
+
+      if (p_peek === 'P' && m_peek === 'M' && plus_peek === '+') {
+        // Full "BPM+" sequence detected. Consume ch ('B'), P, M, +
+        // 'ch' (which is 'B') is already consumed by the main readNextChar() call.
+        // Now consume P, M, + from the parser stream.
+        this.parser.readNextChar(); // Consume P
+        this.parser.readNextChar(); // Consume M
+        this.parser.readNextChar(); // Consume +
+
+        // Perform BPM change action
+        this.bpm += 80;
+        this.bpm = Math.max(30, this.bpm);
+        this.mainLoopNeedsBPMUpdate = true;
+
+        // Ensure activeSequence is clear in case it was set by something else (though unlikely here)
+        this.activeSequence = "";
+        return null; // BPM change processed, no note to play from this sequence
+      }
+      // If not a full "BPM+" sequence, 'B' will fall through to normal note processing.
+      // No need to set activeSequence for 'B' here.
+    }
+
+    // Existing R sequence logic (can remain as is, since 'R' is not a note)
     if (this.activeSequence === "" && charUpper === 'R') {
       this.activeSequence = "R";
       return null;
@@ -145,48 +173,27 @@ export default class MainPlayer {
     if (this.activeSequence === "R") {
       this.activeSequence = "";
       if (ch === '+') {
+        console.log(`Octave change: R+ detected. Octave before: ${this.currentOctave}`);
         this.currentOctave = Math.min(8, this.currentOctave + 1);
+        console.log(`Octave after: ${this.currentOctave}`);
       } else if (ch === '-') {
+        console.log(`Octave change: R- detected. Octave before: ${this.currentOctave}`);
         this.currentOctave = Math.max(1, this.currentOctave - 1);
+        console.log(`Octave after: ${this.currentOctave}`);
       } else {
+        // If sequence is broken, re-process the current char 'ch'
+        // Make sure activeSequence is clear before reprocessing.
+        this.activeSequence = ""; // Clear sequence before reprocessing
         return this.#processChar(ch);
       }
       return null;
     }
-
-    if (this.activeSequence === "" && charUpper === 'B') {
-      this.activeSequence = "B";
-      return null;
-    }
-    if (this.activeSequence === "B") {
-      if (charUpper === 'P') {
-        this.activeSequence = "BP";
-      } else {
-        this.activeSequence = "";
-        return this.#processChar(ch);
-      }
-      return null;
-    }
-    if (this.activeSequence === "BP") {
-      if (charUpper === 'M') {
-        this.activeSequence = "BPM";
-      } else {
-        this.activeSequence = "";
-        return this.#processChar(ch);
-      }
-      return null;
-    }
-    if (this.activeSequence === "BPM") {
-      this.activeSequence = "";
-      if (ch === '+') {
-        this.bpm += 80;
-        this.bpm = Math.max(30, this.bpm);
-        this.mainLoopNeedsBPMUpdate = true;
-      } else {
-        return this.#processChar(ch);
-      }
-      return null;
-    }
+    // This line ensures that if a sequence (like R) was initiated but not completed
+    // by a subsequent character, the activeSequence state is reset.
+    // For 'R', it's reset within its block if '+' or '-' isn't found.
+    // If 'R' was the *ch* and no R+, R- followed, it would be reset here too.
+    // This is a general catch-all. If all sequences manage their state perfectly,
+    // this specific line might become redundant, but it's safer for now.
     this.activeSequence = "";
 
     if (charUpper in this.noteValues) {
@@ -215,6 +222,7 @@ export default class MainPlayer {
       const randomNoteKey = noteKeys[Math.floor(Math.random() * noteKeys.length)];
       pitch = 12 * this.currentOctave + this.noteValues[randomNoteKey];
       this.lastPitch = pitch;
+      this.lastCharWasNoteGrapheme = true; // Added line
     } else if (ch === '\n' || ch === '\r') {
       let currentDefaultListIndex = this.instrumentList.indexOf(this.currentInstrument);
       if (this.instrumentCycleIndex === -1 && currentDefaultListIndex !== -1) {

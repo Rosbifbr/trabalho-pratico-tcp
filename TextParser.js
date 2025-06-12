@@ -23,8 +23,16 @@ export default class TextParser {
     return this.isEOF() ? null : this.text[this.index++];
   }
 
+  peekCharAt(offset) {
+    const peekIndex = this.index + offset;
+    if (peekIndex < 0 || peekIndex >= this.text.length) {
+      return null;
+    }
+    return this.text[peekIndex];
+  }
+
   peekNextChar() {
-    return this.isEOF() ? null : this.text[this.index];
+    return this.peekCharAt(0);
   }
 
   isEOF() {
