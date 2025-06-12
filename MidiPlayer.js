@@ -1,120 +1,139 @@
-// Improved MidiPlayer.js with better instrument mapping and sound fidelity
-import * as Tone from "https://cdn.jsdelivr.net/npm/tone@latest/+esm";
-
+// MidiPlayer.js using soundfont-player
 export default class MidiPlayer {
   constructor() {
-    this.synth = null;
-    this.bpm = 120;
-    this.octave = 4;
-    this.instrumentNumber = 0;
-    // Expanded instrument mapping for General MIDI programs with better oscillator types and effects
-    this.instrumentMap = {
-      0: { type: "sine", detune: 0, partials: [1, 0.5, 0.3] },         // Acoustic Grand Piano
-      1: { type: "square", detune: 5, partials: [1, 0.4] },           // Bright Acoustic Piano
-      2: { type: "triangle", detune: 10, partials: [1, 0.6, 0.2] },    // Electric Grand Piano
-      3: { type: "sawtooth", detune: 0, partials: [1, 0.3] },          // Honky-tonk Piano
-      15: { type: "triangle", detune: 15, partials: [1, 0.7, 0.1] },   // Tubular Bells
-      24: { type: "square", detune: -10, partials: [1, 0.5, 0.2] },    // Nylon String Guitar (Bandoneon approximation)
-      110: { type: "sawtooth", detune: 20, partials: [1, 0.8, 0.4] },  // Bagpipe
-      114: { type: "sine", detune: 25, partials: [1, 0.2] },           // Agogô
-      123: { type: "square", detune: -20, partials: [1, 0.3, 0.1] }     // Sea Waves
+    this.audioContext = null;
+    this.instrumentPlayer = null;
+    this.gainValue = 1.0; // Default volume 100%
+    this.instrumentNumber = 0; // Default to Acoustic Grand Piano
+
+    this.midiToSoundfontName = {
+      0: 'acoustic_grand_piano',
+      15: 'tubular_bells',
+      24: 'acoustic_guitar_nylon', // Placeholder for Bandoneon
+      110: 'bagpipe',
+      114: 'agogo',
+      123: 'seashore', // Placeholder for Sea Waves
+      125: 'telephone_ring',
+      // Add more mappings as needed
     };
-    this.volumeDb = 0;
-    this.reverb = null;
-    this.delay = null;
   }
 
-  async init() {
-    await Tone.start();
-    // Initialize effects for richer sound
-    this.reverb = new Tone.Reverb({ decay: 2, wet: 0.3 }).toDestination();
-    this.delay = new Tone.PingPongDelay({ delayTime: "8n", feedback: 0.2, wet: 0.1 }).toDestination();
-    this.#createSynth("sine");
+  init() {
+    if (!this.audioContext) {
+      this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    this.gainValue = 1.0; // Reset gain value on init
+    // Ensure an instrument is loaded by default, e.g., piano
+    if (!this.instrumentPlayer) {
+      this.changeInstrument(this.instrumentNumber);
+    }
   }
 
-  #createSynth(type, options = {}) {
-    if (this.synth) this.synth.dispose();
-    const config = this.instrumentMap[this.instrumentNumber] || { type: "sine", detune: 0, partials: [1] };
-    this.synth = new Tone.PolySynth(Tone.Synth, {
-      oscillator: {
-        type: config.type || type,
-        detune: config.detune || 0,
-        partials: config.partials || [1]
-      },
-      envelope: {
-        attack: options.attack || 0.01,
-        decay: options.decay || 0.1,
-        sustain: options.sustain || 0.5,
-        release: options.release || 0.5
-      }
-    }).connect(this.reverb).connect(this.delay).toDestination();
-    this.synth.volume.value = this.volumeDb;
+  changeInstrument(midiProgramNumber) {
+    if (!this.audioContext) {
+      this.init(); // Ensure AudioContext is initialized
+    }
+
+    const instrumentName = this.midiToSoundfontName[midiProgramNumber] || this.midiToSoundfontName[0];
+
+    // Before loading a new instrument, stop any existing player to free up resources
+    if (this.instrumentPlayer) {
+        this.instrumentPlayer.stop();
+    }
+
+    Soundfont.instrument(this.audioContext, instrumentName, { soundfont: 'FluidR3_GM', gain: this.gainValue })
+      .then(player => {
+        this.instrumentPlayer = player;
+        // console.log(`Instrument ${instrumentName} loaded.`);
+      })
+      .catch(err => {
+        console.error('Failed to load instrument:', instrumentName, err);
+        // Fallback to default instrument if loading fails
+        if (midiProgramNumber !== 0) { // Avoid infinite loop if default also fails
+            this.changeInstrument(0);
+        }
+      });
+    this.instrumentNumber = midiProgramNumber; // Keep track of the current MIDI program number
   }
 
   playNote(midiNote, durationSec) {
-    if (midiNote === null) return;
-    // Adjust envelope based on instrument for more realistic sound
-    const options = this.#getEnvelopeOptions(this.instrumentNumber);
-    if (this.synth.voices.every(v => !v.active)) {
-      this.#createSynth(null, options); // Recreate only if no active voices to avoid glitches
-    }
-    this.synth.triggerAttackRelease(Tone.Frequency(midiNote, "midi"), durationSec);
-  }
-
-  #getEnvelopeOptions(program) {
-    // Customize envelope based on instrument type for varied attack/release
-    switch (program) {
-      case 0: // Piano-like
-        return { attack: 0.005, decay: 0.1, sustain: 0.3, release: 0.2 };
-      case 15: // Bells
-        return { attack: 0.01, decay: 0.2, sustain: 0.1, release: 1.5 };
-      case 24: // Guitar/Bandoneon
-        return { attack: 0.02, decay: 0.15, sustain: 0.4, release: 0.3 };
-      case 110: // Bagpipe
-        return { attack: 0.1, decay: 0.2, sustain: 0.8, release: 0.5 };
-      case 123: // Sea Waves
-        return { attack: 0.5, decay: 0.3, sustain: 0.7, release: 2.0 };
-      default:
-        return { attack: 0.01, decay: 0.1, sustain: 0.5, release: 0.5 };
+    if (this.instrumentPlayer && midiNote !== null) {
+      // Ensure audio context is running (e.g., after user interaction)
+      if (this.audioContext.state === 'suspended') {
+        this.audioContext.resume();
+      }
+      this.instrumentPlayer.play(midiNote, this.audioContext.currentTime, { duration: durationSec, gain: this.gainValue });
+    } else if (!this.instrumentPlayer) {
+      // console.warn("Instrument not loaded yet. Call changeInstrument first or wait for it to load.");
+      // Optionally, queue the note or try to load a default instrument.
+      // For now, just log a warning.
     }
   }
 
-  changeInstrument(program) {
-    this.instrumentNumber = program;
-    const options = this.#getEnvelopeOptions(program);
-    this.#createSynth(null, options);
-    // Adjust effects based on instrument
-    this.reverb.wet.value = program === 123 ? 0.6 : program === 15 ? 0.5 : 0.3;
-    this.delay.wet.value = program === 123 ? 0.4 : program === 110 ? 0.2 : 0.1;
+  setVolume(volumePercentage) {
+    this.gainValue = Math.max(0, Math.min(1, volumePercentage / 100));
+    // The gain is applied when loading the instrument or playing a note.
+    // If an instrument is already loaded and we want to change its volume for currently playing/future notes,
+    // we might need to either reload it or use a GainNode.
+    // For simplicity, this new volume will primarily affect notes played after this setting is changed,
+    // and instruments loaded after this change.
+    // If dynamic volume change for already loaded instrument is critical,
+    // a GainNode approach would be better:
+    // 1. In init(): Create a masterGain node, connect it to audioContext.destination.
+    //    this.masterGain = this.audioContext.createGain();
+    //    this.masterGain.gain.value = this.gainValue;
+    //    this.masterGain.connect(this.audioContext.destination);
+    // 2. In changeInstrument(): Connect the loaded player to this.masterGain instead of audioContext.destination.
+    //    Soundfont.instrument(..., { destination: this.masterGain })
+    // 3. In setVolume(): Update this.masterGain.gain.value.
+    //    this.masterGain.gain.setValueAtTime(this.gainValue, this.audioContext.currentTime);
+    // This current implementation applies gain at play() time, which is simpler.
+    if (this.instrumentPlayer) {
+        // To make volume changes more immediate for future notes without reloading the instrument,
+        // we can update the gain property if the player supports it directly,
+        // or rely on the gain parameter in play() method.
+        // Soundfont-player's play() takes a gain option, so this.gainValue will be used.
+    }
   }
 
-  setVolume(lvl) {
-    this.volumeDb = Tone.gainToDb(lvl / 100);
-    if (this.synth) this.synth.volume.value = this.volumeDb;
-  }
-
-  setBPM(b) {
-    this.bpm = b;
-    Tone.Transport.bpm.value = b;
-  }
+  // setBPM method is removed as BPM is handled by MainPlayer.js
 
   setOctave(o) {
-    this.octave = o;
+    // This method might be relevant for adjusting midiNote values before playing,
+    // if octave adjustments are not handled by the note generation logic itself.
+    // For now, assuming MainPlayer.js or TextParser.js handles octave logic.
+    // If MidiPlayer needs to adjust notes based on an octave setting, implement here.
+    // Example: this.octave = o; // Store octave if needed for note adjustment.
   }
 
   stopAll() {
-    if (this.synth) {
-      this.synth.releaseAll();
-      this.synth.dispose();
-      this.synth = null;
+    if (this.instrumentPlayer) {
+      this.instrumentPlayer.stop(); // Stops all currently playing notes on this instrument
     }
-    if (this.reverb) {
-      this.reverb.dispose();
-      this.reverb = null;
+    // If using a masterGain node that might hold onto resources, consider disconnecting.
+    // if (this.masterGain) {
+    //   this.masterGain.disconnect();
+    // }
+    // To truly stop and release all audio resources, the AudioContext might need to be closed.
+    // However, this is usually managed by the lifecycle of the application, not just stopping notes.
+    // if (this.audioContext) {
+    //   this.audioContext.close().then(() => {
+    //     this.audioContext = null;
+    //   });
+    // }
+  }
+
+  getInstrumentName(midiProgramNumber) {
+    // Replace underscores with spaces and capitalize words for better display
+    const rawName = this.midiToSoundfontName[midiProgramNumber];
+    if (rawName) {
+      return rawName.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
     }
-    if (this.delay) {
-      this.delay.dispose();
-      this.delay = null;
+    // Fallback for unknown instruments or if default is needed
+    const defaultRawName = this.midiToSoundfontName[0]; // Default to acoustic_grand_piano if number not found
+    if (defaultRawName) {
+        return defaultRawName.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ') + ` (GM#${midiProgramNumber})`;
     }
+    return `GM#${midiProgramNumber}`; // Absolute fallback
   }
 }
