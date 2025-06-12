@@ -140,29 +140,35 @@ export default class MainPlayer {
 
     // Refactored BPM+ sequence detection using peeking
     if (charUpper === 'B') {
-      const p_peek = this.parser.peekCharAt(0)?.toUpperCase(); // char for parser.index (next char)
-      const m_peek = this.parser.peekCharAt(1)?.toUpperCase(); // char for parser.index + 1
-      const plus_peek = this.parser.peekCharAt(2);           // char for parser.index + 2
+      const p_char_peek = this.parser.peekCharAt(0);
+      const m_char_peek = this.parser.peekCharAt(1);
+      const plus_char_peek = this.parser.peekCharAt(2);
 
-      if (p_peek === 'P' && m_peek === 'M' && plus_peek === '+') {
-        // Full "BPM+" sequence detected. Consume ch ('B'), P, M, +
-        // 'ch' (which is 'B') is already consumed by the main readNextChar() call.
-        // Now consume P, M, + from the parser stream.
-        this.parser.readNextChar(); // Consume P
-        this.parser.readNextChar(); // Consume M
-        this.parser.readNextChar(); // Consume +
+      // Explicitly check if all peeked characters are non-null before further checks
+      if (p_char_peek !== null && m_char_peek !== null && plus_char_peek !== null) {
+        if (p_char_peek.toUpperCase() === 'P' &&
+            m_char_peek.toUpperCase() === 'M' &&
+            plus_char_peek === '+') {
 
-        // Perform BPM change action
-        this.bpm += 80;
-        this.bpm = Math.max(30, this.bpm);
-        this.mainLoopNeedsBPMUpdate = true;
+          // Full "BPM+" sequence detected. Consume ch ('B'), P, M, +
+          // 'ch' (which is 'B') is already consumed by the main readNextChar() call.
+          // Now consume P, M, + from the parser stream.
+          this.parser.readNextChar(); // Consume P
+          this.parser.readNextChar(); // Consume M
+          this.parser.readNextChar(); // Consume +
 
-        // Ensure activeSequence is clear in case it was set by something else (though unlikely here)
-        this.activeSequence = "";
-        return null; // BPM change processed, no note to play from this sequence
+          // Perform BPM change action
+          this.bpm += 80;
+          this.bpm = Math.max(30, this.bpm);
+          this.mainLoopNeedsBPMUpdate = true;
+
+          // Ensure activeSequence is clear in case it was set by something else (though unlikely here)
+          this.activeSequence = "";
+          return null; // BPM change processed, no note to play from this sequence
+        }
       }
-      // If not a full "BPM+" sequence, 'B' will fall through to normal note processing.
-      // No need to set activeSequence for 'B' here.
+      // If not a full "BPM+" sequence (either due to null peeks or content mismatch),
+      // 'B' will fall through to normal note processing.
     }
 
     // Existing R sequence logic (can remain as is, since 'R' is not a note)

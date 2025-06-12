@@ -57,6 +57,9 @@ export default class MidiPlayer {
   }
 
   playNote(midiNote, durationSec) {
+    // Log the received midiNote and other relevant parameters
+    console.log(`MidiPlayer.playNote: midiNote=${midiNote}, durationSec=${durationSec}, instrumentGain=${this.gainValue}, audioContextState=${this.audioContext?.state}`);
+
     if (this.instrumentPlayer && midiNote !== null) {
       // Ensure audio context is running (e.g., after user interaction)
       if (this.audioContext.state === 'suspended') {
@@ -64,9 +67,10 @@ export default class MidiPlayer {
       }
       this.instrumentPlayer.play(midiNote, this.audioContext.currentTime, { duration: durationSec, gain: this.gainValue });
     } else if (!this.instrumentPlayer) {
-      // console.warn("Instrument not loaded yet. Call changeInstrument first or wait for it to load.");
-      // Optionally, queue the note or try to load a default instrument.
-      // For now, just log a warning.
+      console.warn(`MidiPlayer.playNote: Instrument not loaded. Note ${midiNote} not played.`);
+    } else if (midiNote === null) {
+      // This case should ideally not happen if MainPlayer filters null notes, but log if it does.
+      console.log("MidiPlayer.playNote: Received null midiNote. No note played.");
     }
   }
 
